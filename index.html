@@ -400,7 +400,7 @@ body.resting .wrap{padding-bottom:220px}
    sincronização opcional pelo Firebase gratuito, sem servidor próprio.
    Nenhum dado pessoal fica escrito neste código: tudo vive no banco cifrado.
    ===================================================================== */
-const APP = 'saude', VERSION = '1.1';
+const APP = 'saude', VERSION = '1.2';
 
 /* ===================== CRIPTOGRAFIA ===================== */
 const CRYPTO = (() => {
@@ -1233,7 +1233,7 @@ const TABS = [
 ];
 const SUBS = {
   treinos:['trn', [['hoje','Hoje'],['cargas','Cargas'],['fichas','Fichas'],['exercicios','Exercícios'],['historico','Histórico']]],
-  alim:['ali', [['dia','Dia'],['semana','Semana'],['alimentos','Alimentos'],['sintomas','Alimentos × sintomas']]],
+  alim:['ali', [['dia','Dia'],['cardapio','Cardápio'],['semana','Semana'],['alimentos','Alimentos'],['sintomas','Alimentos × sintomas']]],
   exames:['exa', [['res','Resultados'],['docs','Documentos'],['rel','Relatório']]],
   saude:['sau', [['diario','Diário'],['corpo','Peso e medidas'],['remedios','Suplementos e remédios'],['consultas','Consultas']]],
   perfil:['per', [['dados','Dados'],['clinico','Histórico clínico'],['metas','Metas'],['ajustes','Ajustes']]],
@@ -1289,6 +1289,7 @@ function vInicio(){
           <div class="stat card" style="box-shadow:none;background:var(--card-2)"><span class="label">Água</span><b>${isNum(D.agua) ? D.agua + ' copos' : '—'}</b><small>${isNum(D.agua) ? nf(D.agua * .25) + ' L' : ''}</small></div></div>
           <button class="link" data-act="diario">Editar o diário de hoje ${ic('chevron')}</button>`
         : `<p class="note" style="margin:4px 0 10px">Leva menos de um minuto: sono, dores, intestino e água. É o que alimenta os alertas e o treino adaptado.</p><button class="btn pri full" data-act="diario">${ic('plus')}Registrar o dia</button>`}</div>
+      ${cardInicio()}
       <div class="card" role="button" tabindex="0" data-goto="alim:dia"><div class="card-head"><h3>Alimentação hoje</h3><span class="label">${N.n} ${N.n === 1 ? 'item' : 'itens'}</span></div>
         ${N.n || N.sup.tom.length ? macroBlock(N) : `<p class="note" style="margin:4px 0 0">Nada registrado hoje. Toque em <b>Refeição</b> e escreva, por exemplo, “200 g de fraldinha e 150 g de arroz”.</p>`}
         ${kcalM ? `<div class="bar" style="margin-top:12px"><i class="${N.t.kcal > kcalM * 1.15 ? 'warn' : ''}" style="width:${Math.min(100, N.t.kcal / kcalM * 100)}%"></i></div><p class="foot" style="margin-top:6px">${nf0(N.t.kcal)} de ${nf0(kcalM)} kcal da meta validada${N.t.kcal < kcalM ? ` · faltam ${nf0(kcalM - N.t.kcal)}` : ''}</p>` : `<p class="foot">Sem meta validada de calorias. Cadastre em Perfil › Metas quando seu nutricionista definir.</p>`}</div>
@@ -1554,10 +1555,10 @@ function formRestr(r){
 
 
 /* ===================== ALIMENTAÇÃO ===================== */
-const REF_TIPOS = ['Café da manhã','Pré-treino','Pós-treino','Almoço','Lanche da tarde','Jantar','Ceia','Outro'];
+const REF_TIPOS = ['Café da manhã','Pré-treino','Pós-treino','Lanche da manhã','Almoço','Lanche da tarde','Jantar','Ceia','Outro'];
 function vAlim(){
   const s = UI.ali;
-  const body = s === 'semana' ? vAliSemana() : s === 'alimentos' ? vAliAlimentos() : s === 'sintomas' ? vAliSintomas() : vAliDia();
+  const body = s === 'cardapio' ? vCardapio() : s === 'semana' ? vAliSemana() : s === 'alimentos' ? vAliAlimentos() : s === 'sintomas' ? vAliSintomas() : vAliDia();
   return head('Alimentação', 'Registro rápido, com a fonte de cada número.') + subnav('alim') + body;
 }
 function vAliDia(){
@@ -1613,7 +1614,7 @@ function vAliSintomas(){
 // Editor de refeição: cada item guarda os valores por 100 g da base, para recalcular quando você muda a quantidade.
 let REF_ED = null;
 function formRef(m, preItens){
-  const isNew = !m || !m.id; m = {data:UI.aliDay || today(), hora:new Date().toTimeString().slice(0,5), tipo:guessTipo(), itens:[], ...(m || {})};
+  const isNew = !m || !m.id || !get(m.id); m = {data:UI.aliDay || today(), hora:new Date().toTimeString().slice(0,5), tipo:guessTipo(), itens:[], ...(m || {})};
   REF_ED = {itens:JSON.parse(JSON.stringify(preItens || m.itens || []))};
   openSheet({title: isNew ? 'Nova refeição' : 'Refeição', fields:[{k:'tipo', label:'Refeição', type:'select', options:REF_TIPOS}, {k:'hora', label:'Hora', type:'time'}, {k:'data', label:'Data', type:'date'}, {k:'obs', label:'Observação', ph:'Ex.: comi metade do prato'}], data:m,
     extra:`<div class="fieldset">Itens<small>Busque na tabela TACO ou nos seus alimentos. Para algo sem cadastro, use “Item com valores do rótulo”.</small></div>
@@ -2230,6 +2231,103 @@ function formPlano(){
 }
 
 
+/* ===================== CARDÁPIO (plano alimentar por horário de treino) ===================== */
+// O plano fica nos seus dados (item "cardapio"), nunca no código. Cada versão tem as refeições do dia,
+// o dia padrão e as trocas. "Comi" registra a refeição com os alimentos já pesados, para conferir depois.
+const TACO_IDX = new Map(TACO.map((r, i) => [r[0], i]));
+const cardapio = () => get('cardapio');
+function srcFood(src){
+  if (String(src).startsWith('base:')) return foodById('food_base_' + src.slice(5));
+  const i = TACO_IDX.get(src); return i == null ? null : foodById('taco_' + i);
+}
+function versaoDoDia(d){
+  const C = cardapio(); if (!C) return null;
+  const pick = get('cdia_' + d)?.versao || lsGet('cardVersao') || C.versoes[0].id;
+  return C.versoes.find(v => v.id === pick) || C.versoes[0];
+}
+// Itens prontos para a refeição: alimento da base + gramas (estimadas quando a quantidade veio em unidades).
+function cardItens(list){
+  return (list || []).map(x => { const f = srcFood(x.src); if (!f) return {nome:x.txt, base:'manual', kcal:'', p:'', c:'', g:'', aviso:'alimento não encontrado'};
+    return {nome:f.nome, base:f.base, foodId:f.id, per100:{kcal:f.kcal, p:f.p, c:f.c, g:f.g, fib:f.fib, na:f.na, k:f.k}, gramas:x.g, est:!!x.est, plano:x.txt}; });
+}
+const mealKey = (d, vid, i) => `card_${d}_${vid}_${i}`;
+const escolha = (d, vid, i) => get('cdia_' + d)?.opc?.[`${vid}_${i}`] ?? '';
+function itensEscolhidos(m, op){ return op === '' ? m.padrao : (m.opcoes?.[+op]?.itens || m.padrao); }
+function comi(d, vid, i){
+  const C = cardapio(), v = C?.versoes.find(x => x.id === vid), m = v?.refeicoes[i]; if (!m) return;
+  const op = escolha(d, vid, i), itens = cardItens(itensEscolhidos(m, op)).map(cleanItem);
+  const hora = d === today() ? new Date().toTimeString().slice(0, 5) : m.hora;
+  put({id:mealKey(d, vid, i), kind:'ref', data:d, hora, tipo:m.tipo, itens, obs:`Plano (${v.curto}): ${m.nome}${op !== '' ? ' · opção ' + (+op + 1) : ' · dia padrão'}`, plano:{vid, i, op}});
+  toast(`${m.nome} registrado`);
+}
+function proxRefeicao(){
+  const C = cardapio(); if (!C) return null;
+  const d = today(), v = versaoDoDia(d), hm = new Date().toTimeString().slice(0, 5);
+  const ms = v.refeicoes.map((m, i) => ({m, i})).filter(x => !x.m.evento && !get(mealKey(d, v.id, x.i)));
+  return {v, x: ms.find(x => x.m.hora >= addMin(hm, -60)) || null, pend: ms.length};
+}
+const addMin = (hm, n) => { const [h, m] = hm.split(':').map(Number); const t = Math.max(0, h * 60 + m + n); return `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`; };
+function vCardapio(){
+  const C = cardapio();
+  if (!C) return `<div class="card">${emptyBox('fork','orange', 'Seu plano alimentar ainda não está no app. Importe o arquivo de configuração em Perfil › Ajustes › Importar arquivo.')}</div>`;
+  const d = UI.aliDay, v = versaoDoDia(d), N = dayNutri(d);
+  const done = v.refeicoes.filter((m, i) => !m.evento && get(mealKey(d, v.id, i))).length, total = v.refeicoes.filter(m => !m.evento).length;
+  const nowHm = new Date().toTimeString().slice(0, 5);
+  return `<div class="monthnav card" style="padding:10px 14px"><button class="icon-btn" data-act="day-prev" aria-label="Dia anterior">${ic('chevL')}</button><b>${cap(fmtDL(d))}</b><button class="icon-btn" data-act="day-next" aria-label="Próximo dia" ${d >= today() ? 'disabled' : ''}>${ic('chevron')}</button></div>
+  <div class="card"><div class="card-head"><h3>Qual o horário do treino ${d === today() ? 'hoje' : 'neste dia'}?</h3></div>
+    <div class="seg" style="margin-top:6px">${C.versoes.map(x => `<button class="${x.id === v.id ? 'on' : ''}" data-cardv="${x.id}">Treino ${esc(x.treino || x.curto)}</button>`).join('')}</div>
+    <div class="macro" style="grid-template-columns:repeat(3,minmax(0,1fr))"><div><small>Refeições feitas</small><b>${done} de ${total}</b></div><div><small>Registrado hoje</small><b>${nf0(N.t.kcal)} kcal</b><small>${nf0(N.t.p)} g proteína</small></div><div><small>Plano completo</small><b>≈ ${nf0(v.kcalDia)} kcal</b><small>≈ ${nf0(v.protDia)} g proteína</small></div></div>
+    <p class="foot">${esc(C.fonte || '')}. O plano indica cerca de ${nf0(C.metaKcal || 2500)} kcal; o “≈” é a conta do app pela tabela TACO com pesos de alimento pronto, e pode diferir porque o plano não diz se as carnes são pesadas cruas ou prontas.</p></div>
+  <div class="card">${v.refeicoes.map((m, i) => {
+    if (m.evento) return `<div class="ex" style="padding:10px 0"><div class="row"><span class="hora">${m.hora}</span>${tile(/Treino/.test(m.nome) ? 'dumbbell' : /Sono/.test(m.nome) ? 'moon' : 'drop', /Treino/.test(m.nome) ? 'blue' : 'gray')}<div class="main"><div class="t" style="font-weight:600">${esc(m.nome)}</div><div class="m note">${esc(m.preparo || '')}</div></div></div></div>`;
+    const reg = get(mealKey(d, v.id, i)), op = escolha(d, v.id, i), lista = op === '' ? m.padraoTxt : m.opcoes[+op].txt, kc = op === '' ? m.kcal : m.opcoes[+op].kcal, pr = op === '' ? m.prot : m.opcoes[+op].prot;
+    const agora = d === today() && !reg && m.hora <= addMin(nowHm, 60) && m.hora >= addMin(nowHm, -90);
+    return `<div class="ex" ${agora ? 'style="background:color-mix(in srgb,var(--accent) 7%,transparent);margin:0 -16px;padding:14px 16px;border-radius:14px"' : ''}><div class="ex-h"><div class="row" style="align-items:flex-start;min-width:0"><span class="hora" style="padding-top:2px">${m.hora}</span><div style="min-width:0"><div class="t">${esc(m.nome)}${agora ? '<span class="chip good">agora</span>' : ''}</div><div class="m">${esc(lista).replace(/ \+ /g, ' · ')}</div><div class="m">≈ ${nf0(kc)} kcal · ${nf0(pr)} g proteína${m.preparo ? ' · ' + esc(m.preparo) : ''}</div></div></div>
+      ${reg ? `<span class="pill-st ok">${ic('check').replace('class="ic"','class="ic" style="width:14px;height:14px"')}${reg.hora || ''}</span>` : ''}</div>
+      <div class="mini-row" style="margin-left:56px">${(m.opcoes || []).length ? `<select data-cardop="${v.id}|${i}" aria-label="Escolher opção"><option value="">Dia padrão</option>${m.opcoes.map((o, k) => `<option value="${k}" ${String(op) === String(k) ? 'selected' : ''}>Opção ${k + 1}</option>`).join('')}</select>` : ''}
+        ${reg ? `<button class="link" data-edit="ref" data-id="${reg.id}">Ajustar o que comi</button><button class="link" data-cardundo="${reg.id}" style="color:var(--muted)">Desfazer</button>` : `<button class="btn sm pri" data-cardcomi="${v.id}|${i}">${ic('check')}Comi</button><button class="link" data-cardajust="${v.id}|${i}">Comi diferente</button>`}</div>
+      ${m.nota ? `<p class="note" style="margin:6px 0 0 56px">${esc(m.nota)}</p>` : ''}</div>`; }).join('')}</div>
+  <div class="grid2"><div class="card"><h3>Levar para o trabalho</h3><div class="list" style="margin-top:6px">${(v.checklist || []).map((c, k) => { const on = !!get('cdia_' + d)?.chk?.[`${v.id}_${k}`]; return `<label class="item" style="cursor:pointer"><input type="checkbox" class="tl-check" data-cardchk="${v.id}_${k}" ${on ? 'checked' : ''}><div class="main"><div class="t" style="font-size:15px;${on ? 'text-decoration:line-through;color:var(--muted)' : ''}">${esc(c)}</div></div></label>`; }).join('')}</div>
+    <h3 style="margin-top:14px">Lembretes</h3><ul class="note" style="padding-left:18px;margin:6px 0 0;line-height:1.5">${(v.lembretes || []).map(l => `<li>${esc(l)}</li>`).join('')}</ul></div>
+  <details class="card"><summary style="cursor:pointer;display:flex;justify-content:space-between;align-items:center"><h3>Lista de compras (7 dias)</h3><span class="note">dia padrão</span></summary>
+    ${(C.compras || []).map(([g, l]) => `<div class="dayhead">${esc(g)}</div><table class="mini">${l.map(([n, q, o]) => `<tr><td>${esc(n)}${o ? `<div class="note">${esc(o)}</div>` : ''}</td><td>${esc(q)}</td></tr>`).join('')}</table>`).join('')}
+    ${(C.compraExtras || []).length ? `<p class="foot">Só se for usar as trocas: ${C.compraExtras.map(esc).join(', ')}.</p>` : ''}</details></div>`;
+}
+function setCdia(d, patch){ const cur = get('cdia_' + d) || {id:'cdia_' + d, kind:'cdia', data:d}; put({...cur, ...patch(cur)}); }
+function cardInicio(){
+  const P = proxRefeicao(); if (!P) return '';
+  const {v, x} = P;
+  if (!x) return `<div class="card" role="button" tabindex="0" data-goto="alim:cardapio"><div class="card-head"><h3>Cardápio de hoje</h3><span class="label">${esc(v.nome)}</span></div><p class="note" style="margin:0">${P.pend ? `${P.pend} refeição(ões) do plano sem registro hoje.` : 'Todas as refeições do plano registradas hoje.'}</p></div>`;
+  const op = escolha(today(), v.id, x.i), m = x.m, lista = op === '' ? m.padraoTxt : m.opcoes[+op].txt;
+  return `<div class="card"><div class="card-head"><h3>Próxima refeição</h3><button class="link" data-goto="alim:cardapio">${esc(v.nome)} ${ic('chevron')}</button></div>
+    <div class="row" style="align-items:flex-start"><span class="hora" style="padding-top:2px">${m.hora}</span><div style="min-width:0;flex:1"><div style="font-weight:600">${esc(m.nome)}</div><div class="note">${esc(lista).replace(/ \+ /g, ' · ')}</div></div></div>
+    <div class="actions" style="margin-top:10px"><button class="btn sm pri" data-cardcomi="${v.id}|${x.i}">${ic('check')}Comi</button><button class="btn sm" data-cardajust="${v.id}|${x.i}">Comi diferente</button></div></div>`;
+}
+
+/* ---------- configuração inicial: perfil + treino + cardápio, num arquivo só ---------- */
+async function importSetup(j){
+  const out = [], n = Date.now();
+  // perfil e itens do histórico: só completa o que falta, nunca apaga o que você já preencheu
+  for (const it of j.perfil || []){
+    const cur = get(it.id);
+    if (!cur) out.push(it);
+    else if (it.id === 'perfil' || it.id === 'metas'){ const merged = {...cur}; Object.entries(it).forEach(([k, val]) => { if (merged[k] === undefined || merged[k] === '' || (it.id === 'metas' && /^kcal/.test(k))) merged[k] = val; }); out.push(merged); }
+  }
+  (j.alimentos || []).forEach(f => { if (!get(f.id)) out.push(f); });
+  if (j.cardapio) out.push({...(get('cardapio') || {}), ...j.cardapio});
+  if (out.length) await storeItems(out.map(o => ({...o, upd:n})));
+  if (j.treino){ await importPlano(j.treino, {inicio:j.treino.inicio || today(), substituir:true}); }
+  for (const s of j.sessoes || []){
+    if (all('sessao').some(x => x.data === s.data)) continue;
+    const f = get('ficha_' + s.letra); if (!f) continue;
+    await put({id:`sess_${s.data}_${s.letra}`, kind:'sessao', status:'concluida', data:s.data, inicio:'', ficha:f.id, adapt:[], obs:s.obs || '', itens:(f.itens || []).map(it => ({exer:it.exer, alvo:{series:it.series, reps:it.reps, desc:it.desc}, motivos:[], trava:false, sets:[], dor:'', rir:''}))});
+  }
+  lsSet('cardVersao', j.cardapio?.versoes?.[0]?.id || '');
+  toast('Pronto: perfil, treino e cardápio carregados');
+  UI.tab = 'inicio'; render(); scrollTo(0, 0);
+}
+
+
 /* ===================== RENDER + EVENTOS ===================== */
 function render(){
   renderChrome();
@@ -2260,7 +2358,7 @@ $('#fab').addEventListener('click', fabAction);
 const EDIT = {ficha:formFicha, exer:formExer, restr:formRestr, ref:m => formRef(m), food:formFood, exr:formExr, doc:formDoc, perg:formPerg, peso:p => formPeso(p), supl:formSupl, med:formMed, cons:formCons, trat:formTrat, cond:formCond};
 document.addEventListener('click', async e => {
   if (e.target.closest('a[href]')) return;
-  const el = e.target.closest('[data-tab],[data-goto],[data-ui],[data-act],[data-edit],[data-close],[data-scale],[data-take],[data-untake],[data-startficha],[data-sessview],[data-sess],[data-alertact],[data-aliday],[data-exview],[data-docopen],[data-docdl],[data-dia],[data-tratplus],[data-refrm],[data-firm],[data-cprm],[data-refadd],[data-cargadet],[data-regedit]');
+  const el = e.target.closest('[data-tab],[data-goto],[data-ui],[data-act],[data-edit],[data-close],[data-scale],[data-take],[data-untake],[data-startficha],[data-sessview],[data-sess],[data-alertact],[data-aliday],[data-exview],[data-docopen],[data-docdl],[data-dia],[data-tratplus],[data-refrm],[data-firm],[data-cprm],[data-refadd],[data-cargadet],[data-regedit],[data-cardv],[data-cardcomi],[data-cardajust],[data-cardundo]');
   if (!el) return;
   if (el.dataset.close !== undefined){ if (e.target === el || el.tagName === 'BUTTON'){ closeSheet(); if (SESS_DRAFT) render(); } return; }
   if (el.dataset.scale){ const [k, v] = el.dataset.scale.split('|'); const inp = document.getElementById('f-' + k); if (!inp) return; const off = false; inp.value = v; el.parentElement.querySelectorAll('button').forEach(b => { const on = !off && b === el; b.classList.toggle('on', on); b.setAttribute('aria-checked', String(on)); }); SHEET?.fire?.(); return; }
@@ -2286,6 +2384,10 @@ document.addEventListener('click', async e => {
   if (el.dataset.tratplus){ const x = get(el.dataset.tratplus); if (x){ put({...x, feitas:[...new Set([...(x.feitas || []), today()])].sort()}); toast('Sessão registrada'); } return; }
   if (el.dataset.refrm !== undefined){ syncRefRows(); REF_ED.itens.splice(+el.dataset.refrm, 1); drawRefItems(); return; }
   if (el.dataset.refadd){ const f = foodById(el.dataset.refadd); if (f){ refAddFood(f, ''); $('#ref-q').value = ''; $('#ref-res').innerHTML = ''; setTimeout(() => { const g = document.getElementById('ri-g-' + (REF_ED.itens.length - 1)); g?.focus(); }, 30); } return; }
+  if (el.dataset.cardv){ const v = el.dataset.cardv; lsSet('cardVersao', v); setCdia(UI.aliDay, () => ({versao:v})); return; }
+  if (el.dataset.cardcomi){ const [vid, i] = el.dataset.cardcomi.split('|'); comi(UI.tab === 'inicio' ? today() : UI.aliDay, vid, +i); return; }
+  if (el.dataset.cardajust){ const [vid, i] = el.dataset.cardajust.split('|'); const d = UI.tab === 'inicio' ? today() : UI.aliDay; const v = cardapio().versoes.find(x => x.id === vid), m = v.refeicoes[+i]; return formRef({id:mealKey(d, vid, +i), data:d, tipo:m.tipo, hora:d === today() ? new Date().toTimeString().slice(0, 5) : m.hora, obs:`Plano (${v.curto}): ${m.nome} · ajustado`}, cardItens(itensEscolhidos(m, escolha(d, vid, +i)))); }
+  if (el.dataset.cardundo){ del(el.dataset.cardundo); toast('Registro desfeito'); return; }
   if (el.dataset.cargadet){ return showCarga(el.dataset.cargadet); }
   if (el.dataset.regedit){ return formMinhaReg(el.dataset.regedit); }
   if (el.dataset.firm){ el.closest('.fi-row')?.remove(); return; }
@@ -2367,6 +2469,8 @@ document.addEventListener('change', async e => {
   if (t.dataset.set && SESS_DRAFT){ const [i, j, k] = t.dataset.set.split('|'); if (k === 'ok'){ const it = SESS_DRAFT.itens[+i], st = it.sets[+j]; st.ok = t.checked; if (t.checked && st.reps === '' && isNum(st.prev)){ st.reps = +st.prev; const ri = document.getElementById(`st-${i}-${j}-reps`); if (ri) ri.value = st.prev; } saveDraft(); if (t.checked){ const last = +j === it.sets.length - 1; startRest(restSecs(it.alvo), last ? 'próximo exercício' : `série ${+j + 2} de ${get(it.exer)?.nome || ''}`); } } return; }
   if (t.dataset.sessf && SESS_DRAFT){ const [i, k] = t.dataset.sessf.split('|'); SESS_DRAFT.itens[+i][k] = t.value === '' ? '' : +t.value; put(SESS_DRAFT); render(); return; }
   if (t.dataset.riest !== undefined){ syncRefRows(); REF_ED.itens[+t.dataset.riest].est = t.checked; drawRefItems(); return; }
+  if (t.dataset.cardop){ const [vid, i] = t.dataset.cardop.split('|'); setCdia(UI.aliDay, c => ({opc:{...(c.opc || {}), [`${vid}_${i}`]: t.value}})); return; }
+  if (t.dataset.cardchk){ const k = t.dataset.cardchk; setCdia(UI.aliDay, c => ({chk:{...(c.chk || {}), [k]: t.checked}})); return; }
   if (t.dataset.pergok){ const p = get(t.dataset.pergok); if (p) put({...p, feita:true, feitaEm:today()}); return; }
   if (t.id === 'exhist-sel'){ UI.exHist = t.value; render(); return; }
   if (t.id === 'doc-file'){ const f = t.files?.[0]; DOC_FILE = f || null; const info = $('#doc-info'); if (info && f) info.textContent = `${f.name} · ${nf(f.size / 1048576, 1)} MB${/^image\//.test(f.type) ? ' · a foto será reduzida para economizar espaço' : ''}`; const ti = $('#f-titulo'); if (ti && !ti.value && f) ti.value = f.name.replace(/\.[^.]+$/, ''); return; }
@@ -2376,6 +2480,7 @@ $('#importFile').addEventListener('change', async e => {
   let j; try { j = JSON.parse(await f.text()); } catch(err){ toast('Arquivo inválido: escolha um arquivo .json do app Saúde'); return; }
   if (j && j.app === 'saude-sync') return formSyncImport(j);
   if (j && j.app === 'saude-treino') return formImportPlano(j);
+  if (j && j.app === 'saude-setup') return importSetup(j);
   if (j && (j.app === 'saude-integral' || j.app === 'saude-perfil') && Array.isArray(j.itens)){ const n = await mergeItems(j.itens); toast(`${n} registro(s) importados`); render(); return; }
   toast('Arquivo não reconhecido: escolha um backup ou o arquivo de perfil do app Saúde');
 });
